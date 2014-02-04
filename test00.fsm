@@ -1,0 +1,30 @@
+fsm test00 {
+	file_code = "xxx.c";
+	file_header = "xxx.h";
+	init_state = a;
+
+	events {
+		evta,
+		evtb,
+		evtc
+	}
+
+	default {
+		evt_error -> . { handle_error };
+		* -> . { bad_transition };
+	}
+
+	state a {
+		evtb -> b;
+		evtc -> c;
+	}
+
+	state b {
+		evtc -> c;
+	}
+
+	state c {
+		evta -> a;
+	}
+}
+
