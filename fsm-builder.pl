@@ -6,6 +6,11 @@ use warnings;
 
 my %fsm;
 
+use constant {
+	nl  => "\n",
+	tab => "\t"
+};
+
 =head
 fsm xxx {
 	file_code = "xxx.c";
@@ -359,7 +364,7 @@ while ($l = <>) {
 # ----------------------------------------------------- code generation ------
 
 print "/* found fsm: ".join(', ', keys %fsm)." */\n";
-
+if (0) {
 for $fsm_name (keys %fsm) {
 	my (@states) = &find_states($fsm{$fsm_name});
 	my (@events) = &find_events($fsm{$fsm_name});
@@ -483,6 +488,7 @@ for $fsm_name (keys %fsm) {
 	print "#endif /* define(${fsm_name}_use_tt) && ${fsm_name}_use_tt == 1 */\n";
 	print "\n";
 }
+}
 
 
 # ------------------------------------------------------------- utility ------
@@ -593,4 +599,407 @@ sub pop_token {
 	} else {
 		die "expected '$pre' token ($state). line $.: '$$l' qr='$re'\n";
 	}
+}
+
+
+=head1
+building blocks:
+
+= header
+
+   fsm-builder:$fsm_name:events:
+
+   fsm-builder:$fsm_name:states:
+
+   fsm-builder:$fsm_name:types:
+
+   fsm-builder:$fsm_name:user-func-decl:
+
+   fsm-builder:$fsm_name:func-decl:
+
+   fsm-builder:$fsm_name:data-decl:
+
+= source
+
+   fsm-builder:$fsm_name:timestamp-signature:
+   fsm-builder:$fsm_name:header:
+   fsm-builder:$fsm_name:fsm-dump:
+
+tt = transition table
+   fsm-builder:$fsm_name:tt-table-def:
+   fsm-builder:$fsm_name:tt-func-def-header:
+   fsm-builder:$fsm_name:tt-func-def-trans:
+   fsm-builder:$fsm_name:tt-func-def-action:
+   fsm-builder:$fsm_name:tt-func-def-footer:
+
+sc1 = single switch/case function
+   fsm-builder:$fsm_name:sc1-func-def-header:
+   fsm-builder:$fsm_name:sc1-func-def-sc:
+   fsm-builder:$fsm_name:sc1-func-def-footer:
+
+ssc = switch/case function per state + one for the states
+   fsm-builder:$fsm_name:ssc-func-def-header:
+   fsm-builder:$fsm_name:ssc-func-def-sc:
+   fsm-builder:$fsm_name:ssc-func-def-footer:
+   fsm-builder:$fsm_name:ssc-func-st-$st_name-def-header:
+   fsm-builder:$fsm_name:ssc-func-st-$st_name-def-sc:
+   fsm-builder:$fsm_name:ssc-func-st-$st_name-def-footer:
+
+
+=cut
+
+{
+package lang::c;
+use constant tab => "\t";
+sub bb_get_states
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my @states = main::find_states( $fsm );
+	my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+	push @ret, "typedef enum ${fsm_name}_state {";
+	push @ret, tab.$_."," for @states[0..$#states];
+	push @ret, tab.$states[-1];
+	push @ret, "} ${fsm_name}_state_t; /* enum ${fsm_name}_state */";
+	push @ret, "enum { ${fsm_name}_state_no = ".@states." };";
+	return @ret;
+}
+
+sub bb_get_events
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my @events = main::find_events( $fsm );
+	my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+	push @ret, "typedef enum ${fsm_name}_event {";
+	push @ret, tab.$_."," for @events[0..$#events];
+	push @ret, tab.$events[-1];
+	push @ret, "} ${fsm_name}_event_t; /* enum ${fsm_name}_event */";
+	push @ret, "enum { ${fsm_name}_event_no = ".@events." };";
+	return @ret;
+}
+
+sub bb_get_user_funcs_decl
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my @funcs = main::find_funcs($fsm{$fsm_name});
+	my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+	push @ret, "void $_(struct ${fsm_name}_fsm *fsm, enum ${fsm_name}_event evt);" for @funcs;
+	return @ret;
+}
+
+sub bb_get_funcs_decl
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+
+	push @ret, "void ${fsm_name}_fsm_trigger ( struct ${fsm_name}_fsm *fsm, enum ${fsm_name}_event evt )";
+
+	return @ret;
+}
+
+sub bb_get_types
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+
+	push @ret, "struct ${fsm_name}_fsm;";
+	push @ret, "typedef void (* ${fsm_name}_func_t) ( struct ${fsm_name}_fsm *fsm, enum ${fsm_name}_event evt );";
+	push @ret, "";
+	push @ret, "struct ${fsm_name}_fsm_trans {";
+	push @ret, tab."${fsm_name}_state_t new_state;";
+	push @ret, tab."${fsm_name}_func_t action;";
+	push @ret, "}; /* struct ${fsm_name}_trans */";
+	push @ret, "";
+	push @ret, "typedef struct ${fsm_name}_fsm_trans ${fsm_name}_fsm_trans_table_t[${fsm_name}_state_no][${fsm_name}_event_no];";
+	push @ret, "";
+	push @ret, "struct ${fsm_name}_fsm {";
+	push @ret, tab."enum ${fsm_name}_state state;";
+	push @ret, tab."enum ${fsm_name}_event last_event;";
+	push @ret, tab."enum ${fsm_name}_state prev_state;";
+	push @ret, tab."${fsm_name}_fsm_trans_table_t *trans_table;";
+	push @ret, "}; /* struct ${fsm_name}_fsm */";
+
+	return @ret;
+}
+
+sub bb_get_data_decl
+{
+	return '';
+}
+
+sub bb_get_timestamp_signature
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my $fsm_name = $fsm->{fsm_name};
+	return "/* $fsm_name : generated on ".localtime." */";
+}
+
+sub bb_get_header
+{
+	return '';
+}
+
+sub bb_get_fsm_dump
+{
+	return '';
+}
+
+sub bb_get_tt_table_def
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+	my @states = main::find_states( $fsm );
+	my @events = main::find_events( $fsm );
+
+	push @ret, "/* fsm $fsm_name trans table */";
+	push @ret, "struct ${fsm_name}_fsm_trans ${fsm_name}_fsm_trans_table".
+				"[${fsm_name}_state_no][${fsm_name}_event_no] = {";
+	for my $st (@states) {
+		push @ret, tab."/* fsm $fsm_name trans table : state $st */";
+		push @ret, tab."{";
+		for my $ev (@events) {
+			my $tr = main::find_trans( $fsm{$fsm_name}, $st, $ev );
+			die "trans from $st/$ev isn't defined" unless defined $tr;
+			push @ret, tab.tab."{ ".$$tr{new_state}.", ".($$tr{code} ? $$tr{code} : "0")." },\t/* $ev */";
+		}
+		push @ret, tab."},";
+	#	print "\t/* fsm $fsm_name trans table : state $st end */\n";
+	}
+	push @ret, "}; /* end of ${fsm_name}_trans_table[][] */";
+
+	return @ret;
+	
+}
+
+
+sub bb_get_tt_func_def_header
+{
+	my $self = shift;
+	my ($fsm) = @_;
+	my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+	push @ret, "void ${fsm_name}_fsm_trigger ( struct ${fsm_name}_fsm *fsm, enum ${fsm_name}_event evt )";
+	push @ret, "{";
+	push @ret, tab."struct ${fsm_name}_fsm_trans *trans;";
+	return @ret;
+}
+
+sub bb_get_tt_func_def_trans
+{
+	#my $self = shift;
+	#my ($fsm) = @_;
+	#my $fsm_name = $fsm->{fsm_name};
+	my @ret;
+	push @ret, tab."fsm->last_event = evt;";
+	push @ret, tab."trans = fsm->trans_table[fsm->state][evt];";
+	push @ret, tab."if (fsm->state != trans->new_state) { fsm->prev_state = fsm->state; }";
+	push @ret, tab."fsm->state = trans->new_state;";
+	return @ret;
+}
+
+sub bb_get_tt_func_def_action
+{
+	#my $self = shift;
+	#my ($fsm) = @_;
+	#my $fsm_name = $fsm->{fsm_name};
+	#my @ret;
+	return tab."if (trans->action) trans->action(fsm, evt);";
+}
+
+sub bb_get_tt_func_def_footer
+{
+	#my $self = shift;
+	#my ($fsm) = @_;
+	#my $fsm_name = $fsm->{fsm_name};
+	#my @ret;
+	return "}";
+}
+
+
+sub bb
+{
+	my $self = shift;
+	my ($bb_name) = shift;
+	my %bb_map = (
+		'states'		=>	\&bb_get_states,
+		'events'		=>	\&bb_get_events,
+		'user-funcs-decl'	=>	\&bb_get_user_funcs_decl,
+		'funcs_decl'		=>	\&bb_get_funcs_decl,
+		'types'			=>	\&bb_get_types,
+		'data_decl'		=>	\&bb_get_data_decl,
+		'timestamp-signature'	=>	\&bb_get_timestamp_signature,
+		'header'		=>	\&bb_get_header,
+		'fsm_dump'		=>	\&bb_get_fsm_dump,
+		'tt-table-def'		=>	\&bb_get_tt_table_def,
+		'tt-func-def-header'	=>	\&bb_get_tt_func_def_header,
+		'tt-func-def-trans'	=>	\&bb_get_tt_func_def_trans,
+		'tt-func-def-action'	=>	\&bb_get_tt_func_def_action,
+		'tt-func-def-footer'	=>	\&bb_get_tt_func_def_footer,
+	);
+
+	return $bb_map{$bb_name}->( $self, @_ ) if exists $bb_map{$bb_name};
+	'';
+}
+
+sub bb_default
+{
+	my ($self, $ft) = @_;
+	if ($ft eq 'h') {
+		return qw/timestamp-signature states events user-funcs-decl funcs_decl types data_decl/;
+	}
+	if ($ft eq 's') {
+		return qw/timestamp-signature header fsm-dump tt-table-def 
+			tt-func-def-header tt-func-def-trans tt-func-def-action tt-func-def-footer/;
+	}
+}
+
+sub bb_prefix
+{
+	my $self = shift;
+	my ($fsm_name) = @_;
+	'/* fsm-builder:'.$fsm_name.':';
+}
+
+sub bb_suffix
+{
+	' */';
+}
+
+sub guess_file_type
+{
+	my ($self, $fn) = @_;
+	if ($fn =~ /\.h$/) {
+		return 'h';
+	}
+	if ($fn =~ /\.c$/) {
+		return 's';
+	}
+	return '';
+}
+
+sub new
+{
+	my ($class) = @_;
+	return bless {}, $class;
+}
+
+} # package
+
+
+sub read_source
+{
+	my ($fsm_name, $lang, @files) = @_;
+	my %src;
+
+	my $pref = $lang->bb_prefix( $fsm_name );
+	my $suff = $lang->bb_suffix( $fsm_name );
+
+	for my $fn (@files) {
+		open my $f, '<', $fn or do {
+			warn "oops: $fn: $!";
+			next;
+		};
+		my @lines;
+		my $curr_bb;
+		while (my $l = <$f>) {
+			chomp $l;
+			if ($l =~ m!^\Q$pref\E(.*):(begin|end|empty)\Q$suff\E$!) {
+				my ($bb, $mark) = ($1, $2);
+				if ($mark eq 'empty') {
+					die "un-ended fsm marker" if $curr_bb;
+					push @lines, \"$bb";
+				}
+				if ($mark eq 'end') {
+					die "end without begin" unless $curr_bb;
+					die "wrong end" unless $bb eq $curr_bb;
+					$curr_bb = '';
+					push @lines, \"$bb";
+				}
+				elsif ($mark eq 'begin') {
+					die "un-ended fsm marker" if $curr_bb;
+					$curr_bb = $bb;
+				}
+				else {
+					die;
+				}
+			}
+			elsif ($curr_bb) {
+				# ignore generated line, part of building block
+			} else {
+				push @lines, $l;
+			}
+		}
+		die "un-ended fsm marker" if $curr_bb;
+		$src{$fn} = \@lines if @lines;
+	}
+	return %src;
+}
+
+sub default_source
+{
+	my ($fsm_name, $lang, $files, $src) = @_;
+
+	return if keys %$src; # some sources were found. nothing to do.
+	
+	for my $fn (@$files) {
+		my $ft = $lang->guess_file_type( $fn );
+		next unless $ft;
+		my @bbs = $lang->bb_default( $ft );
+		$src->{$fn} = [ map { \"$_" } @bbs ];
+		warn "$fn: $ft: @bbs";
+	}
+}
+
+sub write_source
+{
+	my ($fsm_name, $lang, $src) = @_;
+
+	my $pref = $lang->bb_prefix( $fsm_name );
+	my $suff = $lang->bb_suffix( $fsm_name );
+
+	for my $fn (keys %$src) {
+		rename( $fn, $fn.".bak" );
+		open my $of, '>', $fn or die;
+		for my $l ( @{$src->{$fn}} ) {
+			if (ref $l) {
+				my $bb = $$l;
+				my (@g) = $lang->bb( $bb, $fsm{$fsm_name} );
+				print $of $pref, $bb, ':begin', $suff, "\n";
+				print $of $_, "\n" for @g;
+				print $of $pref, $bb, ':end', $suff, "\n";
+			}
+			else {
+				print $of "$l\n";
+			}
+		}
+	}
+
+}
+
+for my $fsm_name (keys %fsm) {
+	my $fsm = $fsm{$fsm_name};
+	my $lang = lang::c->new();
+
+	print "header: ".$fsm->{file_header}."\n";
+	print "source: ".$fsm->{file_code}."\n";
+
+	my (@l) = map { my $x=$_; $x=~s!"!!g; $x; } ($fsm->{file_header}, $fsm->{file_code});
+
+	my %src = read_source( $fsm_name, $lang, @l );
+	warn "read_source: @{[keys %src]}";
+	default_source( $fsm_name, $lang, \@l, \%src );
+	warn "default_source: @{[keys %src]}";
+	write_source( $fsm_name, $lang, \%src );
 }
